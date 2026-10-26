@@ -1,47 +1,59 @@
 import asyncio
 import logging
-import pyttsx3
+import queue
 import threading
 
-from Listener import Listener
+import pyttsx3
+
 from config.Logger import Logger
+from Listener import Listener
 from model.Message import Message
 
 enable_tts = False
-engine = pyttsx3.init()
-voices = engine.getProperty('voices')
-engine.setProperty('voice', voices[17].id)
+
+# 全局 TTS 队列
+tts_queue: "queue.Queue[str]" = queue.Queue()
+
+
+import subprocess
+
+
+def tts_worker():
+    while True:
+        msg = tts_queue.get()
+        if msg is None:
+            break
+        try:
+            subprocess.run(
+                ["espeak-ng", "-v", "zh", "-s", "200", msg],
+                check=False,
+            )
+        except Exception as e:
+            logging.error(f"TTS 播报失败: {e}")
+        finally:
+            tts_queue.task_done()
+
 
 async def main(func, url_room_id: int):
     maestro = Listener(url_room_id)
     maestro.init_room()
     await asyncio.gather(maestro.connect(), maestro.consume(func))
 
-def tts(msg:str):
-    engine.setProperty('rate', 200)
-    engine.setProperty('volume', 0.7)
-    engine.say(msg)
-    engine.runAndWait()
 
-# this function defined how to handle the message of danmu 
 def handle(message: Message):
     msg = f"{message.username[:1]}说{message.message}"
     logging.info(msg)
-
-    # tts speak 
     if enable_tts:
-        threading.Thread(
-            target=tts,
-            args=(msg,),
-            daemon=True
-        ).start()
+        tts_queue.put(msg)  # 只丢进队列，不再开线程
 
 
 if __name__ == "__main__":
     Logger.init_logger()
 
-    # 直播间监听
-    room_id = 1764821878
+    room_id = 1805595700
     enable_tts = True
+
+    # 启动 TTS worker（只启一次）
+    threading.Thread(target=tts_worker, daemon=True).start()
 
     asyncio.run(main(handle, room_id))
